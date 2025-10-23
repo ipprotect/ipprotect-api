@@ -1,0 +1,155 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ------------------------------------------------------
+// ENUMS
+// ------------------------------------------------------
+
+enum ProofType {
+  DOCUMENT
+  IMAGE
+  VIDEO
+  AUDIO
+  CODE
+  OTHER
+}
+
+enum IpType {
+  COPYRIGHT
+  TRADEMARK
+  PATENT
+  DESIGN
+  UNKNOWN
+}
+
+// ------------------------------------------------------
+// MODELS
+// ------------------------------------------------------
+
+model User {
+  id              String          @id @default(uuid())
+  email           String          @unique
+  passwordHash    String
+  fullName        String?
+  walletPublicKey String?         @unique
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  refreshTokens   RefreshToken[]
+  proofs          Proof[]
+  auditLogs       AuditLog[]
+
+  @@index([email])
+}
+
+// ------------------------------------------------------
+
+model RefreshToken {
+  id         String   @id @default(uuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  hashedJti  String   @unique
+  revokedAt  DateTime?
+  createdAt  DateTime @default(now())
+
+  @@index([userId])
+  @@index([createdAt])
+}
+
+// ------------------------------------------------------
+
+model Proof {
+  id            String   @id @default(uuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  filename      String
+  mimeType      String
+  sizeBytes     Int
+  sha256        String   @unique
+  ipType        IpType   @default(UNKNOWN)
+
+  // Optional external references
+  ipfsCid       String?
+  hederaTxId    String?  @unique
+  hederaTopicId String?
+
+  // Relations
+  aiSummary     ProofAIInsight?
+  signatures    ProofSignature[]
+  auditLogs     AuditLog[]
+
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([userId])
+  @@index([createdAt])   // pagination
+  @@index([ipType])
+}
+
+// ------------------------------------------------------
+// 1:1 AI summary — FK owned here on ProofAIInsight.proofId
+// ------------------------------------------------------
+model ProofAIInsight {
+  id          String   @id @default(uuid())
+
+  proofId     String   @unique
+  proof       Proof    @relation(fields: [proofId], references: [id], onDelete: Cascade)
+
+  summary     Json     // { title, description, category, ... }
+  modelUsed   String
+  generatedAt DateTime @default(now())
+}
+
+// ------------------------------------------------------
+// 1:N Signatures per proof (wallet/identity signatures)
+// ------------------------------------------------------
+model ProofSignature {
+  id         String   @id @default(uuid())
+
+  proofId    String
+  proof      Proof    @relation(fields: [proofId], references: [id], onDelete: Cascade)
+
+  signerName String?
+  walletAddr String?
+  signature  String?  // base64 sig (over digest), or JWS string
+  signedAt   DateTime @default(now())
+
+  @@index([proofId])
+  @@index([walletAddr])
+}
+
+// ------------------------------------------------------
+// Optional: Audit trail for future compliance / admin
+// ------------------------------------------------------
+model AuditLog {
+  id         String   @id @default(uuid())
+  // who did it
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  // what it was about (link to a Proof)
+  proofId    String?
+  proof      Proof?   @relation(fields: [proofId], references: [id], onDelete: Cascade)
+
+  // generic metadata
+  entityType String 
+  entityId   String
+  action     String
+  details    Json?
+  ipAddress  String?
+  userAgent  String?
+
+  createdAt  DateTime @default(now())
+
+  @@index([userId])
+  @@index([proofId])
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}

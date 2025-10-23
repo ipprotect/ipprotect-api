@@ -1,0 +1,37 @@
+{
+  "compilerOptions": {
+    /* Module system */
+    "module": "NodeNext",
+    "moduleResolution": "NodeNext",
+    "target": "ES2022",
+    "lib": ["ES2022"],
+
+    /* Pathing and output */
+    "rootDir": "src",
+    "outDir": "./dist",
+    "baseUrl": "./",
+
+    /* Decorators and DI (NestJS) */
+    "experimentalDecorators": true,
+    "emitDecoratorMetadata": true,
+
+    /* Interop */
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+
+    /* Type safety */
+    "strict": true,
+    "noImplicitAny": true,
+    "strictNullChecks": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true,
+
+    /* Performance and maintainability */
+    "incremental": true,
+    "declaration": true,
+    "removeComments": true,
+    "sourceMap": true
+  },
+  "include": ["src/**/*.ts", "src/**/*.d.ts"],
+  "exclude": ["node_modules", "dist", "test", "**/*spec.ts"]
+}

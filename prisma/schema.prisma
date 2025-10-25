@@ -28,6 +28,47 @@ enum IpType {
   UNKNOWN
 }
 
+enum LegalStatus {
+  UNVERIFIED
+  ANCHORED      // anchored on primary chain
+  ADMISSIBLE    // meets evidence bar (e.g., platform-signed + chain receipts)
+  REGISTERED    // synced with official registry / affidavit on file
+}
+
+enum AnchorNetwork {
+  HEDERA
+  ETH_L2
+  BTC_OTS
+  OTHER
+}
+
+enum SignatureAlgo {
+  ED25519
+  ECDSA_P256
+  RSA_PSS
+  OTHER
+}
+
+enum DigestAlgo {
+  SHA256
+  SHA3_256
+  OTHER
+}
+
+enum AuditAction {
+  LOGIN
+  LOGOUT
+  TOKEN_REFRESH
+  PROOF_CREATE
+  PROOF_VERIFY_PUBLIC
+  PROOF_CERTIFICATE_ISSUE
+  WALLET_LINK
+  WALLET_UNLINK
+  AI_REGENERATE_SUMMARY
+  LEGAL_ANCHOR
+  LEGAL_STATUS_UPDATE
+}
+
 // ------------------------------------------------------
 // MODELS
 // ------------------------------------------------------
@@ -38,14 +79,30 @@ model User {
   passwordHash    String
   fullName        String?
   walletPublicKey String?         @unique
+  jurisdiction    String?         // e.g. "NG", "US", "EU"
+  termsVersionAccepted String?    // current accepted version tag (e.g. "tos-1.0")
   createdAt       DateTime        @default(now())
   updatedAt       DateTime        @updatedAt
 
   refreshTokens   RefreshToken[]
   proofs          Proof[]
   auditLogs       AuditLog[]
+  termsAcceptances TermsAcceptance[] // history (optional)
 
   @@index([email])
+}
+
+// Optional consent history for legal defensibility
+model TermsAcceptance {
+  id          String   @id @default(uuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  version     String   // "tos-1.0"
+  acceptedAt  DateTime @default(now())
+  ipAddress   String?
+  userAgent   String?
+
+  @@index([userId, version])
 }
 
 // ------------------------------------------------------
@@ -69,6 +126,15 @@ model Proof {
   userId        String
   user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
+// New for legal posture
+  legalStatus        LegalStatus @default(UNVERIFIED)
+  jurisdiction       String?         // snapshot at time of creation
+  legalClauseVersion String?         // e.g. "legal-clause-v1.0"
+  platformSignature  String?         // base64 signature by IPProtect key (for certificate/admissibility)
+
+  // Evidence context
+  proofType      ProofType?          // you defined enum; now use it
+
   filename      String
   mimeType      String
   sizeBytes     Int
@@ -79,11 +145,14 @@ model Proof {
   ipfsCid       String?
   hederaTxId    String?  @unique
   hederaTopicId String?
+  hederaConsensusAt DateTime? // consensus timestamp
 
   // Relations
   aiSummary     ProofAIInsight?
   signatures    ProofSignature[]
   auditLogs     AuditLog[]
+  anchors       ProofAnchor[]        // NEW: multi-chain receipts
+  certificates  ProofCertificate[]   // optional: certificate issuance history
 
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
@@ -91,6 +160,41 @@ model Proof {
   @@index([userId])
   @@index([createdAt])   // pagination
   @@index([ipType])
+   @@index([legalStatus])
+  @@index([jurisdiction])
+}
+
+model ProofAnchor {
+  id         String        @id @default(uuid())
+
+  proofId    String
+  proof      Proof         @relation(fields: [proofId], references: [id], onDelete: Cascade)
+
+  network    AnchorNetwork
+  txId       String?       // chain txId or receipt reference
+  anchorRef  Json?         // arbitrary receipt: block no, merkleRoot, state proof, etc.
+  anchoredAt DateTime?     // chain finality timestamp
+  status     String?       // e.g. "CONFIRMED", "PENDING", "FAILED"
+
+  @@unique([proofId, network, txId])
+  @@index([proofId, network])
+}
+
+model ProofCertificate {
+  id          String   @id @default(uuid())
+  proofId     String
+  proof       Proof    @relation(fields: [proofId], references: [id], onDelete: Cascade)
+
+  version         Int        // incremental issuance counter
+  serial          String     @unique // human-friendly identifier
+  clauseVersion   String     // e.g. "legal-clause-v1.0"
+  issuedAt        DateTime   @default(now())
+  pdfSha256       String?    // hash of the rendered PDF (evidence chain)
+  platformSignature String?  // signature over the certificate hash
+  publicVerifyUrl String?    // frozen URL including hash param
+
+  @@unique([proofId, version])
+  @@index([proofId, issuedAt])
 }
 
 // ------------------------------------------------------
@@ -128,20 +232,20 @@ model ProofSignature {
 // ------------------------------------------------------
 // Optional: Audit trail for future compliance / admin
 // ------------------------------------------------------
+
 model AuditLog {
   id         String   @id @default(uuid())
-  // who did it
+
   userId     String?
   user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
 
-  // what it was about (link to a Proof)
   proofId    String?
   proof      Proof?   @relation(fields: [proofId], references: [id], onDelete: Cascade)
 
-  // generic metadata
+  action     AuditAction    // enum for standardization
+  jurisdiction String?      // snapshot for legal context
   entityType String 
   entityId   String
-  action     String
   details    Json?
   ipAddress  String?
   userAgent  String?
@@ -152,4 +256,6 @@ model AuditLog {
   @@index([proofId])
   @@index([entityType, entityId])
   @@index([createdAt])
+  @@index([action, createdAt])
 }
+

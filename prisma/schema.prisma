@@ -7,10 +7,11 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-// ------------------------------------------------------
-// ENUMS
-// ------------------------------------------------------
+/*───────────────────────────────────────────────────────────────────────────────
+  ENUMS
+───────────────────────────────────────────────────────────────────────────────*/
 
+/// Content class of the uploaded asset (helps UI, search, evidence context)
 enum ProofType {
   DOCUMENT
   IMAGE
@@ -20,6 +21,7 @@ enum ProofType {
   OTHER
 }
 
+/// Legal category asserted by the user at upload time
 enum IpType {
   COPYRIGHT
   TRADEMARK
@@ -28,13 +30,15 @@ enum IpType {
   UNKNOWN
 }
 
+/// Lifecycle/state of a proof from a legal-evidence perspective
 enum LegalStatus {
-  UNVERIFIED
-  ANCHORED      // anchored on primary chain
-  ADMISSIBLE    // meets evidence bar (e.g., platform-signed + chain receipts)
-  REGISTERED    // synced with official registry / affidavit on file
+  UNVERIFIED       // created, not yet anchored or platform-signed
+  ANCHORED         // receipt on a primary chain exists (Hedera/ETH/BTC-OTS)
+  ADMISSIBLE       // meets evidence bar (platform signature + chain receipts)
+  REGISTERED       // synced with official registry / affidavit on file
 }
 
+/// Chain/network used for anchoring receipts
 enum AnchorNetwork {
   HEDERA
   ETH_L2
@@ -42,6 +46,7 @@ enum AnchorNetwork {
   OTHER
 }
 
+/// Crypto algorithm used by a signer (wallet/platform)
 enum SignatureAlgo {
   ED25519
   ECDSA_P256
@@ -49,12 +54,14 @@ enum SignatureAlgo {
   OTHER
 }
 
+/// Digest algorithm used for file fingerprinting
 enum DigestAlgo {
   SHA256
   SHA3_256
   OTHER
 }
 
+/// Standardized audit events for compliance and IR (incident response)
 enum AuditAction {
   LOGIN
   LOGOUT
@@ -69,193 +76,327 @@ enum AuditAction {
   LEGAL_STATUS_UPDATE
 }
 
-// ------------------------------------------------------
-// MODELS
-// ------------------------------------------------------
+/// The “kind” of entity referenced in an audit log
+enum AuditEntity {
+  USER
+  PROOF
+  ANCHOR
+  CERTIFICATE
+  LEGAL
+  AUTH
+  OTHER
+}
 
+/// State of a specific chain anchor attempt
+enum AnchorStatus {
+  PENDING
+  CONFIRMED
+  FAILED
+}
+
+/*───────────────────────────────────────────────────────────────────────────────
+  MODELS
+───────────────────────────────────────────────────────────────────────────────*/
+
+/// Registered account who can create proofs and manage assets
 model User {
-  id              String          @id @default(uuid())
-  email           String          @unique
-  passwordHash    String
-  fullName        String?
-  walletPublicKey String?         @unique
-  jurisdiction    String?         // e.g. "NG", "US", "EU"
-  termsVersionAccepted String?    // current accepted version tag (e.g. "tos-1.0")
-  createdAt       DateTime        @default(now())
-  updatedAt       DateTime        @updatedAt
+  /// Stable internal id
+  id                     String   @id @default(uuid())
+  /// Login identity (unique)
+  email                  String   @unique @db.VarChar(320)
+  /// Argon2 hash of user password
+  passwordHash           String   @db.Text
+  /// Optional display name
+  fullName               String?  @db.VarChar(120)
+  /// Optional linked wallet public key (base64/hex depending on chain)
+  walletPublicKey        String?  @unique
+  /// Where the user primarily resides (policy/routing)
+  jurisdiction           String?  @db.VarChar(8)
+  /// Last accepted ToS/Privacy version tag
+  termsVersionAccepted   String?  @db.VarChar(64)
+  /// Timestamps
+  createdAt              DateTime @default(now())
+  updatedAt              DateTime @updatedAt
 
-  refreshTokens   RefreshToken[]
-  proofs          Proof[]
-  auditLogs       AuditLog[]
-  termsAcceptances TermsAcceptance[] // history (optional)
+  /// Active and historical refresh sessions
+  refreshTokens          RefreshToken[]
+  /// All proofs created by this user
+  proofs                 Proof[]
+  /// Security/compliance audit entries associated with this user
+  auditLogs              AuditLog[]
+  /// History of legal acceptances for defensibility
+  termsAcceptances       TermsAcceptance[]
 
   @@index([email])
 }
 
-// Optional consent history for legal defensibility
+/// History of terms/privacy acceptance for legal defensibility
 model TermsAcceptance {
-  id          String   @id @default(uuid())
-  userId      String
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  version     String   // "tos-1.0"
-  acceptedAt  DateTime @default(now())
-  ipAddress   String?
-  userAgent   String?
+  id            String   @id @default(uuid())
+  /// Owner of the acceptance record
+  userId        String
+  user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Version tag, e.g. "tos-2025-10-01"
+  version       String   @db.VarChar(64)
+  /// Jurisdiction context at acceptance time (US/EU/NG…)
+  jurisdiction  String   @db.VarChar(8)
+  /// When accepted
+  acceptedAt    DateTime @default(now())
+  /// Evidence of acceptance (for court—optional)
+  ipAddress     String?  @db.VarChar(64)
+  userAgent     String?  @db.VarChar(512)
 
+  /// Prevent double acceptance of the same version by same user
+  @@unique([userId, version])
   @@index([userId, version])
+  @@index([version, jurisdiction])
 }
 
-// ------------------------------------------------------
-
+/// Rotating refresh tokens (sessions). Each row is a revocable session.
 model RefreshToken {
   id         String   @id @default(uuid())
+  /// Owner of the session
   userId     String
   user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  hashedJti  String   @unique
+  /// Argon2 hash of the JTI embedded in the refresh JWT
+  hashedJti  String   @unique @db.VarChar(128)
+  /// Optional device fingerprint label
+  deviceId   String?  @db.VarChar(100)
+  /// Mirror the JWT exp as a cleanup bound
+  expiresAt  DateTime
+  /// Set when rotated or forced logout
   revokedAt  DateTime?
   createdAt  DateTime @default(now())
 
-  @@index([userId])
-  @@index([createdAt])
+  @@index([userId, createdAt])
+  @@index([expiresAt])
 }
 
-// ------------------------------------------------------
-
+/// The core “proof of existence” record for a file/content
 model Proof {
-  id            String   @id @default(uuid())
+  id            String @id @default(uuid())
+  /// Owner who created/controls this proof
   userId        String
   user          User     @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-// New for legal posture
+  /// Evidence posture for courts and workflows
   legalStatus        LegalStatus @default(UNVERIFIED)
-  jurisdiction       String?         // snapshot at time of creation
-  legalClauseVersion String?         // e.g. "legal-clause-v1.0"
-  platformSignature  String?         // base64 signature by IPProtect key (for certificate/admissibility)
+  /// Snapshot of user jurisdiction at creation (helps routing/policy)
+  jurisdiction       String?
+  /// Which legal clause set the certificate/template references
+  legalClauseVersion String?
+  /// Optional platform signature over the digest/certificate to raise admissibility
+  platformSignature  String?
 
-  // Evidence context
-  proofType      ProofType?          // you defined enum; now use it
+  /// Content classification to aid UI/filters
+  proofType      ProofType?
 
-  filename      String
-  mimeType      String
-  sizeBytes     Int
-  sha256        String   @unique
-  ipType        IpType   @default(UNKNOWN)
+  /// Original uploaded filename
+  filename      String      @db.Text
+  /// Server-detected content type
+  mimeType      String      @db.VarChar(255)
+  /// Exact byte size (BigInt supports >2GB)
+  sizeBytes     BigInt      @db.BigInt
 
-  // Optional external references
-  ipfsCid       String?
+  /// Algorithm used for the fingerprint
+  digestAlgo    DigestAlgo           @default(SHA256)
+  /// Hex fingerprint (e.g., 64 chars for SHA-256)
+  digestHex     String               @db.VarChar(128)
+  /// Legacy field for compatibility with older APIs/tools
+  sha256        String?              @unique
+  /// Claimed IP right category
+  ipType        IpType               @default(UNKNOWN)
+
+  /// Optional IPFS content id if uploaded
+  ipfsCid       String? @db.VarChar(128)
+  /// Hedera transaction id if anchored
   hederaTxId    String?  @unique
-  hederaTopicId String?
-  hederaConsensusAt DateTime? // consensus timestamp
+  /// Hedera topic id (e.g., 0.0.x)
+  hederaTopicId String? @db.VarChar(64)
+  /// Hedera consensus timestamp (finality)
+  hederaConsensusAt DateTime?
 
-  // Relations
+  /// AI-generated human summary for UX/search
   aiSummary     ProofAIInsight?
+  /// User and platform signatures related to this proof
   signatures    ProofSignature[]
+  /// Audit entries related to this proof
   auditLogs     AuditLog[]
-  anchors       ProofAnchor[]        // NEW: multi-chain receipts
-  certificates  ProofCertificate[]   // optional: certificate issuance history
+  /// One proof may have many anchors across different networks
+  anchors       ProofAnchor[]
+  /// Certificate issuance history (regenerations/versions)
+  certificates  ProofCertificate[]
 
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  @@index([userId])
-  @@index([createdAt])   // pagination
+  /// List views by user & time
+  @@index([userId, createdAt])
+  /// Filter/projections by IP type
   @@index([ipType])
-   @@index([legalStatus])
+  /// Filter by evidence posture
+  @@index([legalStatus])
+  /// Regional filtering/reporting
   @@index([jurisdiction])
+  /// Fast public-verify lookups by hash
+  @@index([digestAlgo, digestHex])
+  /// Prevent same user from re-registering identical digest
+  @@unique([userId, digestAlgo, digestHex])
 }
 
+/// Chain receipt for a proof on a specific network
 model ProofAnchor {
   id         String        @id @default(uuid())
 
   proofId    String
   proof      Proof         @relation(fields: [proofId], references: [id], onDelete: Cascade)
 
+  /// Which chain/network holds the receipt
   network    AnchorNetwork
-  txId       String?       // chain txId or receipt reference
-  anchorRef  Json?         // arbitrary receipt: block no, merkleRoot, state proof, etc.
-  anchoredAt DateTime?     // chain finality timestamp
-  status     String?       // e.g. "CONFIRMED", "PENDING", "FAILED"
+  /// Chain transaction id (may be null while pending)
+  txId       String?      @db.VarChar(200)
+  /// Synthetic dedupe key (e.g., hash(topic + digestHex)) to avoid dup pending rows
+  hashKey    String?      @db.VarChar(200)
+  /// Arbitrary receipt payload: blockNo, merkle root, state proof, etc.
+  anchorRef  Json?
+  /// Chain finality timestamp (when known)
+  anchoredAt DateTime?
+  /// Current state of this anchor attempt
+  status     AnchorStatus?
 
+  /// Avoid duplicate anchors for same tx
   @@unique([proofId, network, txId])
+  /// Query helpers
   @@index([proofId, network])
+  /// Avoid duplicates of the same pending intent
+  @@unique([proofId, network, hashKey])
 }
 
+/// A rendered, versioned certificate for a proof (with QR and platform signature)
 model ProofCertificate {
-  id          String   @id @default(uuid())
-  proofId     String
-  proof       Proof    @relation(fields: [proofId], references: [id], onDelete: Cascade)
+  id               String   @id @default(uuid())
+  proofId          String
+  proof            Proof    @relation(fields: [proofId], references: [id], onDelete: Cascade)
 
-  version         Int        // incremental issuance counter
-  serial          String     @unique // human-friendly identifier
-  clauseVersion   String     // e.g. "legal-clause-v1.0"
-  issuedAt        DateTime   @default(now())
-  pdfSha256       String?    // hash of the rendered PDF (evidence chain)
-  platformSignature String?  // signature over the certificate hash
-  publicVerifyUrl String?    // frozen URL including hash param
+  /// Per-proof issuance counter (1..N)
+  version          Int
+  /// Human-friendly stable serial (printed on certificate)
+  serial           String   @unique
+  /// Which clause text/version this certificate references
+  clauseVersion    String
+  /// When issued
+  issuedAt         DateTime @default(now())
+  /// Hash of the produced PDF (evidence link to bytes)
+  pdfSha256        String?  @db.VarChar(64)
+  /// Platform signature (JWS/base64) over the certificate hash
+  platformSignature String?
+  /// Reference to which platform key signed (for rotation/KMS)
+  platformKeyId    String?  @db.VarChar(100)
+  /// Frozen public verify URL (often QR-encoded)
+  publicVerifyUrl  String?
 
+  /// Enforce monotonic per-proof versioning
   @@unique([proofId, version])
+  /// Latest-first queries
   @@index([proofId, issuedAt])
 }
 
-// ------------------------------------------------------
-// 1:1 AI summary — FK owned here on ProofAIInsight.proofId
-// ------------------------------------------------------
+/// AI-generated summary/metadata (1:1 with Proof)
 model ProofAIInsight {
   id          String   @id @default(uuid())
 
+  /// Owning proof (1:1)
   proofId     String   @unique
   proof       Proof    @relation(fields: [proofId], references: [id], onDelete: Cascade)
 
-  summary     Json     // { title, description, category, ... }
+  /// Structured summary (title/description/category, etc.)
+  summary     Json
+  /// Which AI model produced it (for traceability)
   modelUsed   String
   generatedAt DateTime @default(now())
 }
 
-// ------------------------------------------------------
-// 1:N Signatures per proof (wallet/identity signatures)
-// ------------------------------------------------------
+/// Any signature (user wallet or platform) associated to the proof
 model ProofSignature {
-  id         String   @id @default(uuid())
+  id             String   @id @default(uuid())
 
-  proofId    String
-  proof      Proof    @relation(fields: [proofId], references: [id], onDelete: Cascade)
+  proofId        String
+  proof          Proof    @relation(fields: [proofId], references: [id], onDelete: Cascade)
 
-  signerName String?
-  walletAddr String?
-  signature  String?  // base64 sig (over digest), or JWS string
-  signedAt   DateTime @default(now())
+  /// Optional human label for the signer
+  signerName     String?
+  /// Wallet/account address if applicable
+  walletAddr     String?  @db.VarChar(128)
+  /// Raw public key material (base64/hex/PEM)
+  signerPubKey   String?  @db.Text
+  /// Which algorithm was used for the signature
+  signatureAlgo  SignatureAlgo?
+  /// The signature value (base64 or JWS)
+  signature      String?  @db.Text
+  /// When signature was produced
+  signedAt       DateTime @default(now())
 
   @@index([proofId])
   @@index([walletAddr])
+  /// Practical dedupe guard against accidental double-sign
+  @@unique([proofId, walletAddr, signatureAlgo, signedAt])
 }
 
-// ------------------------------------------------------
-// Optional: Audit trail for future compliance / admin
-// ------------------------------------------------------
-
+/// Immutable audit trail for security and legal defensibility
 model AuditLog {
-  id         String   @id @default(uuid())
+  id           String       @id @default(uuid())
 
-  userId     String?
-  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  /// Who performed the action (nullable for public/anonymous)
+  userId       String?
+  user         User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
 
-  proofId    String?
-  proof      Proof?   @relation(fields: [proofId], references: [id], onDelete: Cascade)
+  /// Optional proof context
+  proofId      String?
+  proof        Proof?       @relation(fields: [proofId], references: [id], onDelete: Cascade)
 
-  action     AuditAction    // enum for standardization
-  jurisdiction String?      // snapshot for legal context
-  entityType String 
-  entityId   String
-  details    Json?
-  ipAddress  String?
-  userAgent  String?
+  /// What happened (normalized)
+  action       AuditAction
+  /// Jurisdiction context at event time (policy/analysis)
+  jurisdiction String?       @db.VarChar(8)
+  /// What entity was touched
+  entityType   AuditEntity
+  /// Specific entity id (e.g., proofId/anchorId)
+  entityId     String        @db.VarChar(64)
+  /// Request correlation id (from middleware)
+  requestId    String?       @db.VarChar(64)
+  /// Freeform metadata (never store secrets/raw file bytes)
+  details      Json?
+  /// Edge evidence for attribution
+  ipAddress    String?       @db.VarChar(64)
+  userAgent    String?       @db.VarChar(512)
 
-  createdAt  DateTime @default(now())
+  createdAt    DateTime      @default(now())
 
   @@index([userId])
   @@index([proofId])
   @@index([entityType, entityId])
-  @@index([createdAt])
   @@index([action, createdAt])
+  @@index([requestId])
 }
 
+/// DB-driven Terms/Privacy content by jurisdiction & version
+model LegalDocument {
+  id           String   @id @default(uuid())
+  /// Version tag, e.g. "tos-2025-10-01"
+  version      String   @unique
+  /// Jurisdiction this doc applies to (US/EU/NG…)
+  jurisdiction String
+  /// Date/time when this text becomes effective
+  effectiveAt  DateTime
+  /// Markdown body for Terms of Service
+  tosMd        String
+  /// Markdown body for Privacy Policy
+  privacyMd    String
+  /// Whether this is currently the active version for its jurisdiction
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  /// Find latest active by jurisdiction & effectiveAt
+  @@index([jurisdiction, isActive, effectiveAt])
+}

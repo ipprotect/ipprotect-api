@@ -5,18 +5,23 @@ const durationRegex = /^\d+(s|m|h|d)$/i;
 
 export const envSchema = z.object({
   // Server
-  NODE_ENV: z
-    .enum(['development', 'test', 'production'])
-    .default('development'),
+  NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
   PORT: z.string().default('4000'),
   API_PREFIX: z.string().default('/api'),
   ALLOWED_ORIGINS: z.string().default(''),
 
   // JWT
-  JWT_ACCESS_SECRET: z.string().min(32, 'JWT_ACCESS_SECRET must be 32+ chars'),
-  JWT_REFRESH_SECRET: z
-    .string()
-    .min(32, 'JWT_REFRESH_SECRET must be 32+ chars'),
+  // ─── JWT (PEM-based hybrid: file paths OR inline PEM text) ────────────────
+  ACCESS_JWT_PRIVATE_KEY: z.string().optional().default(''),
+  ACCESS_JWT_PUBLIC_KEY: z.string().optional().default(''),
+  REFRESH_JWT_PRIVATE_KEY: z.string().optional().default(''),
+  REFRESH_JWT_PUBLIC_KEY: z.string().optional().default(''),
+
+  ACCESS_JWT_PRIVATE_KEY_FILE: z.string().optional().default(''),
+  ACCESS_JWT_PUBLIC_KEY_FILE: z.string().optional().default(''),
+  REFRESH_JWT_PRIVATE_KEY_FILE: z.string().optional().default(''),
+  REFRESH_JWT_PUBLIC_KEY_FILE: z.string().optional().default(''),
+
   JWT_ACCESS_TTL: z
     .string()
     .regex(durationRegex, 'JWT_ACCESS_TTL must look like 900s, 15m, 12h, 30d')
@@ -41,6 +46,19 @@ export const envSchema = z.object({
       (u) => u.startsWith('redis://') || u.startsWith('rediss://'),
       'REDIS_URL must start with redis://',
     ),
+  // Rate limiting
+  RATE_WINDOW_MS: z
+    .string()
+    .regex(/^\d+$/, 'RATE_WINDOW_MS must be an integer in milliseconds')
+    .default('60000'),
+
+  RATE_LIMIT_AUTH: z.string().regex(/^\d+$/).default('10'),
+  RATE_LIMIT_PROOF: z.string().regex(/^\d+$/).default('6'),
+  RATE_LIMIT_VERIFY: z.string().regex(/^\d+$/).default('20'),
+  RATE_LIMIT_HEALTH: z.string().regex(/^\d+$/).default('60'),
+  RATE_LIMIT_STATUS: z.string().regex(/^\d+$/).default('30'),
+
+  TRUST_PROXY: z.string().optional().default('0'),
 
   // Optional providers (warn at runtime if missing)
   HEDERA_ACCOUNT_ID: z.string().optional().default(''),
@@ -59,9 +77,7 @@ export const envSchema = z.object({
   ALLOWED_MIME: z
     .string()
     .optional()
-    .default(
-      'image/png,image/jpeg,application/pdf,text/plain,audio/mpeg,application/zip',
-    ),
+    .default('image/png,image/jpeg,application/pdf,text/plain,audio/mpeg,application/zip'),
 });
 
 export type RawEnv = z.infer<typeof envSchema>;
@@ -70,9 +86,7 @@ export type RawEnv = z.infer<typeof envSchema>;
 export function validateEnv(raw: NodeJS.ProcessEnv): RawEnv {
   const parsed = envSchema.safeParse(raw);
   if (!parsed.success) {
-    const issues = parsed.error.issues
-      .map((i) => `${i.path.join('.')}: ${i.message}`)
-      .join('; ');
+    const issues = parsed.error.issues.map((i) => `${i.path.join('.')}: ${i.message}`).join('; ');
     throw new Error(`Invalid environment configuration: ${issues}`);
   }
   return parsed.data;

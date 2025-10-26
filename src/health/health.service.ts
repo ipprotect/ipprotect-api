@@ -61,11 +61,7 @@ function timeout(ms: number, label: string): Promise<never> {
 }
 
 /** Wraps a promise with a timeout and produces a Probe */
-async function withTimeout<T>(
-  p: Promise<T>,
-  ms: number,
-  label: string,
-): Promise<Probe> {
+async function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<Probe> {
   const start = performance.now();
   try {
     await Promise.race([p, timeout(ms, label)]);
@@ -73,12 +69,7 @@ async function withTimeout<T>(
     return { ok: true, latencyMs };
   } catch (err) {
     const latencyMs = Math.round(performance.now() - start);
-    const message =
-      err instanceof Error
-        ? err.message
-        : typeof err === 'string'
-          ? err
-          : 'error';
+    const message = err instanceof Error ? err.message : typeof err === 'string' ? err : 'error';
     return { ok: false, latencyMs, error: message };
   }
 }
@@ -94,14 +85,13 @@ export class HealthService {
 
   async getStatusSnapshot(): Promise<StatusSnapshot | StatusSnapshotWithDebug> {
     // Run probes in parallel with short timeouts
-    const [dbProbe, redisProbe, hederaProbe, ipfsProbe, aiProbe] =
-      await Promise.all([
-        this.checkDb(),
-        this.checkRedis(),
-        this.checkHedera(),
-        this.checkIpfs(),
-        this.checkAi(),
-      ]);
+    const [dbProbe, redisProbe, hederaProbe, ipfsProbe, aiProbe] = await Promise.all([
+      this.checkDb(),
+      this.checkRedis(),
+      this.checkHedera(),
+      this.checkIpfs(),
+      this.checkAi(),
+    ]);
 
     const checks: StatusSnapshot['checks'] = {
       db: dbProbe.state,
@@ -142,17 +132,9 @@ export class HealthService {
 
   private async checkDb(): Promise<CheckResult> {
     // $executeRawUnsafe returns number of affected rows; here it just exercises the connection
-    const probe = await withTimeout(
-      this.prisma.$executeRawUnsafe('SELECT 1'),
-      800,
-      'db',
-    );
+    const probe = await withTimeout(this.prisma.$executeRawUnsafe('SELECT now()'), 800, 'db');
 
-    const state: CheckState = probe.ok
-      ? probe.latencyMs < 300
-        ? 'ok'
-        : 'degraded'
-      : 'down';
+    const state: CheckState = probe.ok ? (probe.latencyMs < 300 ? 'ok' : 'degraded') : 'down';
 
     return { state, debug: probe };
   }
@@ -201,15 +183,11 @@ export class HealthService {
 
   private checkIpfs(): Promise<CheckResult> {
     const token = this.cfg.getIpfsToken();
-    return token
-      ? Promise.resolve(okAssumed)
-      : Promise.resolve(notConfigured('ipfs'));
+    return token ? Promise.resolve(okAssumed) : Promise.resolve(notConfigured('ipfs'));
   }
 
   private checkAi(): Promise<CheckResult> {
     const key = this.cfg.getOpenAiKey();
-    return key
-      ? Promise.resolve(okAssumed)
-      : Promise.resolve(notConfigured('ai'));
+    return key ? Promise.resolve(okAssumed) : Promise.resolve(notConfigured('ai'));
   }
 }

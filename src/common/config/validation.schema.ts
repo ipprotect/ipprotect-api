@@ -70,6 +70,11 @@ export const envSchema = z.object({
   OPENAI_API_KEY: z.string().optional().default(''),
   OPENAI_MODEL: z.string().optional().default('gpt-4o-mini'),
 
+  // Cloudinary
+  CLOUDINARY_NAME: z.string().min(1, 'CLOUDINARY_NAME is required'),
+  CLOUDINARY_API_KEY: z.string().min(1, 'CLOUDINARY_API_KEY is required'),
+  CLOUDINARY_API_SECRET: z.string().min(1, 'CLOUDINARY_API_SECRET is required'),
+
   PUBLIC_VERIFY_URL: z.string().optional().default(''),
 
   //─ Uploads

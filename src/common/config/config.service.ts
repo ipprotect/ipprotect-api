@@ -175,6 +175,19 @@ export class AppConfigService implements OnModuleInit {
     return this.cfg.get<string>('OPENAI_MODEL') ?? 'gpt-4o-mini';
   }
 
+  // ── Cloudinary
+  getCloudinaryName(): string {
+    return this.cfg.getOrThrow<string>('CLOUDINARY_NAME');
+  }
+
+  getCloudinaryApiKey(): string {
+    return this.cfg.getOrThrow<string>('CLOUDINARY_API_KEY');
+  }
+
+  getCloudinaryApiSecret(): string {
+    return this.cfg.getOrThrow<string>('CLOUDINARY_API_SECRET');
+  }
+
   getPublicVerifyUrl(): string | null {
     const v = this.cfg.get<string>('PUBLIC_VERIFY_URL')?.trim();
     try {
